@@ -21,6 +21,7 @@ Dependencies:
 
 import argparse
 import configparser
+import multiprocessing
 import sys
 import xml.etree.ElementTree as ET
 from concurrent.futures import ProcessPoolExecutor
@@ -1064,6 +1065,15 @@ def load_config(config_path: Path = Path("config.txt")) -> Dict[str, Any]:
 
 
 def main() -> int:
+    # Ensure logs flush promptly when this CLI is launched from the GUI.
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(line_buffering=True, write_through=True)
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(line_buffering=True, write_through=True)
+    except Exception:
+        pass
+
     # Load config.txt first
     config = load_config()
     
@@ -1315,4 +1325,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     raise SystemExit(main())

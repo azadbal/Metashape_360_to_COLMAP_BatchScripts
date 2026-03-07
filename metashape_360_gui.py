@@ -11,6 +11,7 @@ import sys
 import subprocess
 import threading
 import queue
+import multiprocessing
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 from pathlib import Path
@@ -99,6 +100,8 @@ UI_TEXT = {
         "done_ng": "✗ Conversion exited with error code {code}.",
         "error": "Error: {error}",
         "stopped": "Processing stopped.",
+        "exit_confirm_title": "Confirm Exit",
+        "exit_confirm_running": "A conversion is still running. Exit and force-stop the CLI process?",
         "reset_done": "Settings reset to defaults.",
         "saved": "Config saved: {path}",
         "auto_loaded": "Auto-loaded config.txt.",
@@ -173,6 +176,8 @@ UI_TEXT = {
         "done_ng": "✗ 変換がエラーコード {code} で終了しました。",
         "error": "エラー: {error}",
         "stopped": "処理を停止しました。",
+        "exit_confirm_title": "終了確認",
+        "exit_confirm_running": "変換処理が実行中です。終了してCLIプロセスを強制停止しますか？",
         "reset_done": "設定をデフォルトに戻しました。",
         "saved": "設定を保存しました: {path}",
         "auto_loaded": "config.txt を自動読み込みしました。",
@@ -233,6 +238,7 @@ class Metashape360GUI:
         self.root = root
         self.root.geometry("850x900")
         self.root.minsize(750, 700)
+        self.is_closing = False
         self.main_canvas = None
         self.main_scrollbar = None
         self.console = None
@@ -247,6 +253,7 @@ class Metashape360GUI:
         
         # Setup UI
         self.setup_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close_requested)
         
         # Load config if exists
         self.load_config_file()
@@ -686,9 +693,19 @@ class Metashape360GUI:
     
     def build_command(self):
         """Build the command line arguments."""
-        script_path = Path(__file__).parent / "metashape_360_to_colmap.py"
-        # Use unbuffered mode so stdout/stderr is streamed to the GUI log in real time.
-        cmd = [sys.executable, "-u", str(script_path)]
+        # In development we launch the Python script directly.
+        # In frozen mode we launch a companion CLI executable from the same folder.
+        if getattr(sys, "frozen", False):
+            cli_exe = self.get_app_base_dir() / "metashape_360_to_colmap.exe"
+            if not cli_exe.exists():
+                raise FileNotFoundError(
+                    f"Required converter executable was not found: {cli_exe}"
+                )
+            cmd = [str(cli_exe)]
+        else:
+            script_path = self.get_app_base_dir() / "metashape_360_to_colmap.py"
+            # Use unbuffered mode so stdout/stderr is streamed to the GUI log in real time.
+            cmd = [sys.executable, "-u", str(script_path)]
         
         # Required paths
         cmd.extend(["--images", self.var_images.get()])
@@ -746,6 +763,16 @@ class Metashape360GUI:
             cmd.append("--quiet")
         
         return cmd
+
+    def get_app_base_dir(self):
+        """Return directory that contains app runtime files.
+
+        - dev: folder containing this .py file
+        - frozen: folder containing the .exe
+        """
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).parent
+        return Path(__file__).parent
     
     def validate_inputs(self):
         """Validate required inputs before running."""
@@ -776,8 +803,14 @@ class Metashape360GUI:
         """Run the conversion process."""
         if not self.validate_inputs():
             return
-        
-        cmd = self.build_command()
+
+        try:
+            cmd = self.build_command()
+        except Exception as e:
+            messagebox.showerror(self.t("err_title"), str(e))
+            self.log(f"{self.t('error', error=e)}\n")
+            return
+
         self.log(f"{self.t('cmd', cmd=' '.join(cmd))}\n\n")
         
         # Disable run button, enable stop
@@ -795,11 +828,31 @@ class Metashape360GUI:
                     text=True,
                     bufsize=1,
                     universal_newlines=True,
-                    cwd=str(Path(__file__).parent)
+                    cwd=str(self.get_app_base_dir()),
+                    env=self.get_subprocess_env(),
+                    creationflags=self.get_subprocess_creationflags(),
                 )
-                
-                for line in self.process.stdout:
-                    self.output_queue.put(line)
+
+                # Read one character at a time so we can handle both '\n' and
+                # '\r' terminated progress output from the CLI in real time.
+                line_buf = ""
+                while True:
+                    ch = self.process.stdout.read(1)
+                    if ch == "":
+                        if line_buf:
+                            self.output_queue.put(line_buf + "\n")
+                            line_buf = ""
+                        if self.process.poll() is not None:
+                            break
+                        continue
+
+                    if ch in ("\n", "\r"):
+                        if line_buf:
+                            self.output_queue.put(line_buf + "\n")
+                            line_buf = ""
+                        continue
+
+                    line_buf += ch
                 
                 self.process.wait()
                 rc = self.process.returncode
@@ -814,14 +867,32 @@ class Metashape360GUI:
                 self.output_queue.put("__DONE__")
         
         threading.Thread(target=run_process, daemon=True).start()
+
+    def get_subprocess_env(self):
+        """Return environment for subprocess execution.
+
+        Force unbuffered stdio so CLI logs are streamed into the GUI promptly,
+        especially when the GUI itself is running as a windowed executable.
+        """
+        env = os.environ.copy()
+        env.setdefault("PYTHONUNBUFFERED", "1")
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        return env
+
+    def get_subprocess_creationflags(self):
+        """Return subprocess creation flags.
+
+        On Windows, suppress creating an extra console window when the GUI
+        launches the CLI executable.
+        """
+        if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+            return subprocess.CREATE_NO_WINDOW
+        return 0
     
     def stop_conversion(self):
         """Stop the running conversion process."""
         if self.process:
-            try:
-                self.process.terminate()
-            except Exception:
-                pass
+            self.stop_process(force=False)
 
             # Restore UI state immediately so the user can run again
             # even if the worker thread takes time to observe process exit.
@@ -831,9 +902,59 @@ class Metashape360GUI:
 
             self.log(f"\n{self.t('stopped')}\n")
             self.process = None
+
+    def stop_process(self, force=False):
+        """Stop the current CLI process.
+
+        If force=True on Windows, kill the full process tree to ensure the
+        bundled CLI process is terminated immediately.
+        """
+        if not self.process:
+            return
+
+        proc = self.process
+        try:
+            if force and os.name == "nt":
+                # taskkill /T /F kills the target process and its child tree.
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    creationflags=self.get_subprocess_creationflags(),
+                )
+            else:
+                proc.terminate()
+        except Exception:
+            pass
+
+        try:
+            proc.wait(timeout=2)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def on_close_requested(self):
+        """Handle window close with confirmation while conversion is running."""
+        if self.process and self.process.poll() is None:
+            should_exit = messagebox.askyesno(
+                self.t("exit_confirm_title"),
+                self.t("exit_confirm_running"),
+            )
+            if not should_exit:
+                return
+            self.stop_process(force=True)
+
+        self.is_closing = True
+        self.root.destroy()
     
     def poll_output(self):
         """Poll the output queue for process output."""
+        if self.is_closing:
+            return
+
         try:
             while True:
                 msg = self.output_queue.get_nowait()
@@ -846,7 +967,11 @@ class Metashape360GUI:
                     self.log(msg)
         except queue.Empty:
             pass
-        self.root.after(100, self.poll_output)
+        try:
+            self.root.after(100, self.poll_output)
+        except tk.TclError:
+            # Window is already closing/closed.
+            return
     
     def log(self, message):
         """Log message to console."""
@@ -923,7 +1048,7 @@ class Metashape360GUI:
     
     def load_config_file(self):
         """Load config.txt if it exists in the script directory."""
-        config_path = Path(__file__).parent / "config.txt"
+        config_path = self.get_app_base_dir() / "config.txt"
         if config_path.exists():
             self.load_config_from_path(str(config_path))
             self.log(f"{self.t('auto_loaded')}\n")
@@ -1021,6 +1146,8 @@ class Metashape360GUI:
 
 
 def main():
+    multiprocessing.freeze_support()
+
     root = tk.Tk()
     
     # Set DPI awareness on Windows

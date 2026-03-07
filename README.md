@@ -5,6 +5,11 @@ English | 日本語
 ## Overview / 概要
 Convert Agisoft Metashape equirectangular (spherical) camera exports into COLMAP text format, while generating rectilinear crops (top/front/right/back/left/bottom) from each 360° frame. Optional PLY is converted to points3D.txt (via Open3D).
 
+---
+**Windows binary edition with GUI is sold on BOOTH. No need python command and easy to run!**
+- [BOOTH URL] https://kotohibi-cg.booth.pm/items/8061737
+---
+
 Refer to my X
 - https://x.com/naribubu/status/2015376645360849394
 - https://x.com/naribubu/status/2016517770876440901
