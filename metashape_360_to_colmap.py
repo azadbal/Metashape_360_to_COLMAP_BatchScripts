@@ -269,6 +269,7 @@ def create_overexposure_mask(
 def create_person_mask_from_yolo(
     image_path: str,
     yolo_model: Any,
+    yolo_conf: float = 0.25,
     invert_mask: bool = False,
     class_ids: Optional[list] = None,
     mask_overexposure: bool = False,
@@ -282,6 +283,7 @@ def create_person_mask_from_yolo(
     Args:
         image_path: Path to the equirectangular image
         yolo_model: YOLO model instance
+        yolo_conf: Minimum YOLO confidence score (0.0-1.0) to keep detections.
         invert_mask: If True, object=white(255) and background=black(0).
                      If False, object=black(0) and background=white(255) for 3DGS training.
         class_ids: List of YOLO class IDs to include in mask. If None, uses [0] (person only).
@@ -300,7 +302,7 @@ def create_person_mask_from_yolo(
         class_ids = [0]
     
     # Run YOLO detection
-    results = yolo_model(image, verbose=False)
+    results = yolo_model(image, verbose=False, conf=yolo_conf)
     
     # Create binary mask
     mask = np.zeros((image.height, image.width), dtype=np.uint8)
@@ -336,6 +338,7 @@ def generate_mask_and_save(
     image_path: str,
     output_mask_path: str,
     yolo_model_path: str,
+    yolo_conf: float = 0.25,
     invert_mask: bool = False,
     class_ids: Optional[list] = None,
     mask_overexposure: bool = False,
@@ -348,6 +351,7 @@ def generate_mask_and_save(
         image_path: Path to the equirectangular image
         output_mask_path: Path to save the mask
         yolo_model_path: Path to YOLO model
+        yolo_conf: Minimum YOLO confidence score (0.0-1.0) to keep detections
         invert_mask: Whether to invert the mask
         class_ids: List of YOLO class IDs to include in mask
         mask_overexposure: Whether to also mask overexposed pixels
@@ -365,7 +369,7 @@ def generate_mask_and_save(
     
     # Generate mask
     mask = create_person_mask_from_yolo(
-        image_path, yolo_model, invert_mask, class_ids,
+        image_path, yolo_model, yolo_conf, invert_mask, class_ids,
         mask_overexposure=mask_overexposure,
         overexposure_threshold=overexposure_threshold,
         overexposure_dilate=overexposure_dilate,
@@ -503,6 +507,7 @@ def convert_metashape_to_colmap(
     skip_directions: Optional[list] = None,
     generate_masks: bool = False,
     yolo_model_path: str = "yolo11n-seg.pt",
+    yolo_conf: float = 0.25,
     invert_mask: bool = False,
     yaw_offset_per_frame: float = 0.0,
     range_images: Optional[Tuple[int, int]] = None,
@@ -525,6 +530,7 @@ def convert_metashape_to_colmap(
                       If None, processes all images (up to max_images if specified).
         yolo_classes: List of YOLO class IDs to include in mask. If None, uses [0] (person only).
                       Common COCO classes: 0=person, 2=car, 3=motorcycle, 5=bus, 7=truck, etc.
+        yolo_conf: Minimum YOLO confidence score (0.0-1.0) to keep detections.
         rotate_z180: If True, rotate the entire scene 180° around Z-axis.
                      This fixes coordinate system differences between COLMAP and PostShot.
         mask_overexposure: If True, also mask white-blown-out (overexposed) pixels.
@@ -714,7 +720,7 @@ def convert_metashape_to_colmap(
             tmp_mask_name = f"{base_name}_mask.png"
             tmp_mask_path = str(tmp_masks_dir / tmp_mask_name)
             mask_generation_tasks.append((
-                src_image_path, tmp_mask_path, yolo_model_path, invert_mask, yolo_classes,
+                src_image_path, tmp_mask_path, yolo_model_path, yolo_conf, invert_mask, yolo_classes,
                 mask_overexposure, overexposure_threshold, overexposure_dilate,
             ))
         
@@ -732,6 +738,7 @@ def convert_metashape_to_colmap(
                         task[5],
                         task[6],
                         task[7],
+                        task[8],
                     )
                 )
 
@@ -1020,6 +1027,7 @@ def load_config(config_path: Path = Path("config.txt")) -> Dict[str, Any]:
         generate-masks=False
         yolo-model=yolo11n-seg.pt
         yolo-classes=0
+        yolo-conf=0.25
         invert-mask=False
         yaw-offset=0.0
         range-images=10-50
@@ -1186,6 +1194,12 @@ def main() -> int:
         help="Comma-separated YOLO class IDs to include in mask (default: 0 for person). Common COCO classes: 0=person, 2=car, 3=motorcycle, 5=bus, 7=truck. Example: 0,2,5 for person, car, and bus."
     )
     parser.add_argument(
+        "--yolo-conf",
+        type=float,
+        default=float(config["yolo-conf"]) if "yolo-conf" in config else 0.25,
+        help="Minimum YOLO confidence score (0.0-1.0) to keep detections (default: 0.25)"
+    )
+    parser.add_argument(
         "--invert-mask",
         action="store_true",
         default=config.get("invert-mask", False) if isinstance(config.get("invert-mask"), bool) else False,
@@ -1253,6 +1267,10 @@ def main() -> int:
         except ValueError:
             print(f"Error: Invalid yolo-classes format. Use comma-separated integers (e.g., 0,2,5).")
             return 1
+
+    if not (0.0 <= args.yolo_conf <= 1.0):
+        print("Error: --yolo-conf must be in range [0.0, 1.0].")
+        return 1
     
     # Parse skip-directions if specified
     valid_directions = {"top", "front", "right", "back", "left", "bottom"}
@@ -1309,6 +1327,7 @@ def main() -> int:
             skip_directions=skip_directions_list,
             generate_masks=args.generate_masks,
             yolo_model_path=args.yolo_model,
+            yolo_conf=args.yolo_conf,
             invert_mask=args.invert_mask,
             yaw_offset_per_frame=args.yaw_offset,
             range_images=range_images,

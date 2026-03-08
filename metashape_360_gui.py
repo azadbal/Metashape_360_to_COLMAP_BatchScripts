@@ -33,10 +33,11 @@ DEFAULTS = {
     "yaw_offset": 0.0,
     "quiet": False,
     "yolo_classes": "0",
+    "yolo_conf": 0.25,
     "mask_overexposure": False,
     "overexposure_threshold": 250,
     "overexposure_dilate": 5,
-    "yolo_model": "yolo11n-seg.pt",
+    "yolo_model": "yolo11m-seg.pt",
     "apply_component_transform": False,
     "flip_vertical": True,
     "rotate_z180": True,
@@ -44,6 +45,13 @@ DEFAULTS = {
 }
 
 VALID_DIRECTIONS = ["top", "front", "right", "back", "left", "bottom"]
+YOLO_SEG_MODELS = [
+    "yolo11n-seg.pt",
+    "yolo11s-seg.pt",
+    "yolo11m-seg.pt",
+    "yolo11l-seg.pt",
+    "yolo11x-seg.pt",
+]
 
 UI_TEXT = {
     "EN": {
@@ -69,6 +77,7 @@ UI_TEXT = {
         "mask_section": "Mask Generation",
         "enable_yolo": "Enable YOLO mask generation",
         "yolo_classes": "YOLO Class IDs:",
+        "yolo_conf": "YOLO Confidence:",
         "yolo_model": "YOLO Model:",
         "invert_mask": "Invert mask (object=white)",
         "enable_overexp": "Enable overexposure mask",
@@ -118,6 +127,7 @@ UI_TEXT = {
         "tip_range": "Index range of images to process (0-based)",
         "tip_yaw_offset": "Per-frame yaw rotation offset (degrees)",
         "tip_yolo_classes": "Comma-separated class IDs (0=person, 2=car, 3=motorcycle, 5=bus, 7=truck)",
+        "tip_yolo_conf": "Minimum YOLO confidence score to keep detections (0.0-1.0)",
         "tip_overexp_threshold": "Treat pixels as overexposed when all RGB channels exceed this value",
         "tip_overexp_dilate": "Dilation amount to cover fringe artifacts around masks (pixels)",
         "tip_flip_vertical": "Flip Y-axis during equirectangular image sampling",
@@ -145,6 +155,7 @@ UI_TEXT = {
         "mask_section": "マスク生成",
         "enable_yolo": "YOLOマスク生成を有効化",
         "yolo_classes": "YOLOクラスID:",
+        "yolo_conf": "YOLO信頼度閾値:",
         "yolo_model": "YOLOモデル:",
         "invert_mask": "マスク反転 (物体=白)",
         "enable_overexp": "露出オーバーマスクを有効化",
@@ -194,6 +205,7 @@ UI_TEXT = {
         "tip_range": "処理する画像のインデックス範囲 (0ベース)",
         "tip_yaw_offset": "フレームごとのYaw回転オフセット (degrees)",
         "tip_yolo_classes": "カンマ区切りのクラスID (0=person, 2=car, 3=motorcycle, 5=bus, 7=truck)",
+        "tip_yolo_conf": "検出を採用する最小YOLO信頼度スコア (0.0-1.0)",
         "tip_overexp_threshold": "全RGBチャンネルがこの値を超えるピクセルを露出オーバーとみなす",
         "tip_overexp_dilate": "マスク周辺のフリンジアーティファクトをカバーする膨張量 (pixels)",
         "tip_flip_vertical": "Equirectangular画像サンプリング時のY軸反転",
@@ -286,6 +298,7 @@ class Metashape360GUI:
         self.var_generate_masks = tk.BooleanVar(value=DEFAULTS["generate_masks"])
         self.var_invert_mask = tk.BooleanVar(value=DEFAULTS["invert_mask"])
         self.var_yolo_classes = tk.StringVar(value=DEFAULTS["yolo_classes"])
+        self.var_yolo_conf = tk.DoubleVar(value=DEFAULTS["yolo_conf"])
         self.var_yolo_model = tk.StringVar(value=DEFAULTS["yolo_model"])
         
         # Overexposure mask
@@ -479,12 +492,24 @@ class Metashape360GUI:
         yolo_entry.grid(row=0, column=1, sticky="w", padx=5)
         ToolTip(yolo_entry, self.t("tip_yolo_classes"))
 
-        ttk.Label(self.yolo_frame, text=self.t("yolo_model")).grid(row=0, column=2, sticky="w", padx=5)
-        model_entry = ttk.Entry(self.yolo_frame, textvariable=self.var_yolo_model, width=20)
-        model_entry.grid(row=0, column=3, sticky="w", padx=5)
+        ttk.Label(self.yolo_frame, text=self.t("yolo_conf")).grid(row=0, column=2, sticky="w", padx=5)
+        conf_spin = ttk.Spinbox(self.yolo_frame, from_=0.0, to=1.0, increment=0.05,
+                    textvariable=self.var_yolo_conf, width=8)
+        conf_spin.grid(row=0, column=3, sticky="w", padx=5)
+        ToolTip(conf_spin, self.t("tip_yolo_conf"))
+
+        ttk.Label(self.yolo_frame, text=self.t("yolo_model")).grid(row=1, column=0, sticky="w", padx=5)
+        model_combo = ttk.Combobox(
+            self.yolo_frame,
+            textvariable=self.var_yolo_model,
+            values=YOLO_SEG_MODELS,
+            state="readonly",
+            width=24,
+        )
+        model_combo.grid(row=1, column=1, columnspan=3, sticky="w", padx=5)
 
         ttk.Checkbutton(self.yolo_frame, text=self.t("invert_mask"),
-                        variable=self.var_invert_mask).grid(row=1, column=0, columnspan=2, sticky="w", padx=5, pady=3)
+                variable=self.var_invert_mask).grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=3)
 
         ttk.Separator(mask_tab, orient="horizontal").grid(row=2, column=0, columnspan=4, sticky="ew", pady=10)
 
@@ -673,6 +698,7 @@ class Metashape360GUI:
         self.var_generate_masks.set(DEFAULTS["generate_masks"])
         self.var_invert_mask.set(DEFAULTS["invert_mask"])
         self.var_yolo_classes.set(DEFAULTS["yolo_classes"])
+        self.var_yolo_conf.set(DEFAULTS["yolo_conf"])
         self.var_yolo_model.set(DEFAULTS["yolo_model"])
         self.var_mask_overexposure.set(DEFAULTS["mask_overexposure"])
         self.var_overexposure_threshold.set(DEFAULTS["overexposure_threshold"])
@@ -735,6 +761,7 @@ class Metashape360GUI:
         if self.var_generate_masks.get():
             cmd.append("--generate-masks")
             cmd.extend(["--yolo-classes", self.var_yolo_classes.get()])
+            cmd.extend(["--yolo-conf", str(self.var_yolo_conf.get())])
             cmd.extend(["--yolo-model", self.var_yolo_model.get()])
             if self.var_invert_mask.get():
                 cmd.append("--invert-mask")
@@ -1019,6 +1046,7 @@ class Metashape360GUI:
             f"generate-masks={self.var_generate_masks.get()}",
             f"invert-mask={self.var_invert_mask.get()}",
             f"yolo-classes={self.var_yolo_classes.get()}",
+            f"yolo-conf={self.var_yolo_conf.get()}",
             f"yolo-model={self.var_yolo_model.get()}",
             "",
             f"mask-overexposure={self.var_mask_overexposure.get()}",
@@ -1115,6 +1143,8 @@ class Metashape360GUI:
             self.var_invert_mask.set(parse_bool(config["invert-mask"]))
         if "yolo-classes" in config:
             self.var_yolo_classes.set(config["yolo-classes"])
+        if "yolo-conf" in config:
+            self.var_yolo_conf.set(float(config["yolo-conf"]))
         if "yolo-model" in config:
             self.var_yolo_model.set(config["yolo-model"])
         

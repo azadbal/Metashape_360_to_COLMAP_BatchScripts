@@ -57,6 +57,7 @@ python metashape_360_to_colmap.py \
   --yaw-offset 30 \ # If needed, rotate cubemap for each extraction to be more stable for 3DGS. default 0
   --generate-masks \ # Generate masks for specified objects
   --yolo-classes 0,2,5 \ # Mask person (0), car (2), and bus (5). Default: 0 (person only)
+  --yolo-conf 0.25 \ # Minimum YOLO confidence score to keep detections (0.0-1.0)
   --mask-overexposure \ # Also mask white-blown-out (overexposed) pixels
   --overexposure-threshold 250 \ # Pixel value threshold for overexposure detection (default 250)
   --overexposure-dilate 5 \ # Dilation radius in pixels (default 5)
@@ -124,6 +125,7 @@ If you specify an option on the command line, it will override the value in conf
 - `--skip-directions=`:Comma-separated list of directions to skip (top, front, right, back, left, bottom)
 - `--generate-masks` : Generate masks for specified objects using YOLO
 - `--yolo-classes`: Comma-separated YOLO class IDs to include in mask (default: 0 for person only). Common COCO classes: 0=person, 2=car, 3=motorcycle, 5=bus, 7=truck. Example: `--yolo-classes 0,2,5` for person, car, and bus.
+- `--yolo-conf`: Minimum YOLO confidence score in range `0.0-1.0` to keep detections (default: `0.25`). Raise to reduce false positives, lower to reduce misses.
 - `--invert-mask` : Invert mask color from BLACK to WHITE
 - `--mask-overexposure`: Also mask white-blown-out (overexposed) pixels. Pixels where all RGB channels exceed the threshold are detected and masked.(default False)
 - `--overexposure-threshold`: Pixel value threshold (0-255) for overexposure detection (default: 250)
