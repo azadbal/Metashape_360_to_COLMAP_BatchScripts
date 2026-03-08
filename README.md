@@ -7,7 +7,7 @@ Convert Agisoft Metashape equirectangular (spherical) camera exports into COLMAP
 
 ---
 **Windows binary edition with GUI is sold on BOOTH. No need python command and easy to run!**
-- [BOOTH URL] https://kotohibi-cg.booth.pm/items/8061737
+- [BOOTH URL] https://kotohibi-cg.booth.pm/
 ---
 
 Refer to my X
