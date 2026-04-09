@@ -13,13 +13,16 @@ Convert Agisoft Metashape equirectangular (spherical) camera exports into COLMAP
        - Added a mode that performs mask processing with equirectangular and cubemap and fuses them at the end. 
        - Although the processing time will increase, the mask processing system has been improved.
        - <img src="docs/images/dual_mask_mode.png" alt="Dual mask mode" width="320" />
-       - See https://x.com/naribubu/status/2031004096975781946?s=20
+       - See https://x.com/naribubu/status/2031004096975781946
     * Export PNG file support
        - For better 3DGS training
     * V0.5.0
       - Coordinate conversion function for colmap data <br> * This function is developer option. Not supported*
         - https://x.com/kotohibi_3d/status/2040418910470910178
         - How to utilize with LiDAR SLAM : https://x.com/kotohibi_3d/status/2040637580149145909
+    * V0.6.0
+      - Supported custom mask and fixed some bugs.
+        - https://x.com/kotohibi_3d/status/2041909510047199539
 ---
 
 Refer to the detail workflow
