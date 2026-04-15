@@ -47,6 +47,218 @@ except ImportError:  # pragma: no cover - optional dependency
     HAS_YOLO = False
 
 
+def detect_image_format(image_path: Path) -> Tuple[str, str, int]:
+    """Detect image format, PIL mode and bit depth from file.
+    
+    Returns:
+        Tuple of (file_extension, mode_description, bits_per_channel)
+        file_extension: e.g., '.png', '.jpg', '.tiff'
+        mode_description: e.g., 'RGB', 'RGBA', 'RGB;16', 'RGBA;16', etc.
+        bits_per_channel: 8, 16, or 32
+    """
+    # Try with OpenCV first for better 16-bit support
+    import cv2
+    cv_img = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+    
+    # Determine file extension
+    suffix = image_path.suffix.lower()
+    if suffix in ['.jpg', '.jpeg']:
+        ext = '.jpg'
+    elif suffix in ['.png']:
+        ext = '.png'
+    elif suffix in ['.tiff', '.tif']:
+        ext = '.tiff'
+    elif suffix in ['.webp']:
+        ext = '.webp'
+    else:
+        ext = suffix
+    
+    # Detect bit depth and channels from OpenCV
+    bits_per_channel = 8  # default
+    if cv_img is not None:
+        dtype = cv_img.dtype
+        channels = cv_img.shape[2] if len(cv_img.shape) == 3 else 1
+        
+        if dtype == np.uint16:
+            bits_per_channel = 16
+        elif dtype == np.uint32 or dtype == np.float32:
+            bits_per_channel = 32
+        
+        # Construct PIL-compatible mode string for consistency
+        if channels == 1:
+            if bits_per_channel == 16:
+                mode = 'I;16'
+            elif bits_per_channel == 32:
+                mode = 'F'
+            else:
+                mode = 'L'
+        elif channels == 3:
+            if bits_per_channel == 16:
+                mode = 'RGB;16'
+            else:
+                mode = 'RGB'
+        elif channels == 4:
+            if bits_per_channel == 16:
+                mode = 'RGBA;16'
+            else:
+                mode = 'RGBA'
+        else:
+            mode = 'RGB'
+    else:
+        # Fall back to PIL for mode detection
+        img = Image.open(image_path)
+        mode = img.mode
+        if ';16' in mode or 'I;16' in mode:
+            bits_per_channel = 16
+        elif ';32F' in mode or 'F' in mode:
+            bits_per_channel = 32
+    
+    return (ext, mode, bits_per_channel)
+
+
+def open_image_preserving_bitdepth(image_path: str):
+    """Open an image file, preserving 16-bit and higher bit depths.
+    
+    Uses OpenCV for reading to properly support 16-bit RGBA PNG files.
+    Returns either a PIL Image (for 8-bit) or numpy array (for 16-bit+).
+    """
+    import cv2
+    
+    # Read with OpenCV to preserve bit depth
+    cv_img = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+    
+    if cv_img is None:
+        # Fall back to PIL if OpenCV fails
+        return Image.open(image_path)
+    
+    dtype = cv_img.dtype
+    
+    # For 16-bit and higher, keep as numpy array (OpenCV format: BGR/BGRA)
+    if dtype == np.uint16 or dtype == np.uint32 or dtype == np.float32:
+        # Convert BGR to RGB for consistency
+        if len(cv_img.shape) == 3 and cv_img.shape[2] == 3:
+            cv_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+        elif len(cv_img.shape) == 3 and cv_img.shape[2] == 4:
+            cv_img = cv2.cvtColor(cv_img, cv2.COLOR_BGRA2RGBA)
+        # Return as numpy array - we'll handle it specially in crop_direction
+        return cv_img
+    
+    # For 8-bit, convert to PIL Image
+    if len(cv_img.shape) == 3 and cv_img.shape[2] == 3:
+        cv_img = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+    elif len(cv_img.shape) == 3 and cv_img.shape[2] == 4:
+        cv_img = cv2.cvtColor(cv_img, cv2.COLOR_BGRA2RGBA)
+    
+    return Image.fromarray(cv_img)
+
+
+
+
+def get_output_format_extension(output_format: Optional[str], input_ext: str, input_mode: str) -> Tuple[str, bool]:
+    """Get output file extension and whether to preserve alpha channel.
+    
+    Args:
+        output_format: User-specified format (e.g., 'png', 'auto') or None for auto-detect
+        input_ext: Input file extension (e.g., '.png')
+        input_mode: Input PIL mode (e.g., 'RGBA')
+    
+    Returns:
+        Tuple of (extension, preserve_alpha)
+    """
+    if output_format == 'auto' or output_format is None:
+        # Auto-detect: use input format
+        return (input_ext, 'A' in input_mode)
+    
+    # User specified format
+    output_format = output_format.lower().strip('.')
+    
+    if output_format in ['jpg', 'jpeg']:
+        return ('.jpg', False)
+    elif output_format == 'png':
+        return ('.png', True)
+    elif output_format in ['tiff', 'tif']:
+        return ('.tiff', True)
+    elif output_format == 'webp':
+        return ('.webp', True)
+    else:
+        # Unknown format, use input format
+        return (input_ext, 'A' in input_mode)
+
+
+def find_param(calib_xml: ET.Element, param_name: str) -> float:
+    """Find a parameter in calibration XML, return 0.0 if not found."""
+    param = calib_xml.find(param_name)
+    if param is not None and param.text:
+        return float(param.text)
+    return 0.0
+
+
+def numpy_to_pil_image_16bit(array: np.ndarray) -> Image.Image:
+    """Convert numpy array (from OpenCV) to PIL Image, handling 16-bit properly."""
+    if array.dtype == np.uint16:
+        channels = array.shape[2] if len(array.shape) == 3 else 1
+        
+        if channels == 4:
+            # 16-bit RGBA
+            # PIL doesn't have built-in RGBA;16 mode, so we use raw mode
+            size = (array.shape[1], array.shape[0])
+            # Convert to bytes in the right format
+            if array.flags['C_CONTIGUOUS']:
+                data = array.tobytes()
+            else:
+                data = np.ascontiguousarray(array).tobytes()
+            # Create PIL Image with raw mode
+            img = Image.frombytes('RGBA;16', size, data)
+            return img
+        elif channels == 3:
+            # 16-bit RGB
+            size = (array.shape[1], array.shape[0])
+            if array.flags['C_CONTIGUOUS']:
+                data = array.tobytes()
+            else:
+                data = np.ascontiguousarray(array).tobytes()
+            img = Image.frombytes('RGB;16', size, data)
+            return img
+        elif channels == 1:
+            # 16-bit grayscale
+            size = (array.shape[1], array.shape[0])
+            if array.flags['C_CONTIGUOUS']:
+                data = array.tobytes()
+            else:
+                data = np.ascontiguousarray(array).tobytes()
+            img = Image.frombytes('I;16', size, data)
+            return img
+    elif array.dtype == np.uint8:
+        return Image.fromarray(array)
+    else:
+        return Image.fromarray(array)
+
+
+def numpy_to_image_preserving_bitdepth(array: np.ndarray, mode: str):
+    """Convert numpy array to PIL Image or keep as numpy array for bit depth preservation.
+    
+    PIL doesn't support modes like RGBA;16, so for 16-bit+ we return numpy arrays.
+    For 8-bit modes, returns PIL Image.
+    """
+    # For 16-bit and higher, PIL doesn't support the mode strings, so return numpy array
+    if ';16' in mode or 'I;16' in mode or ';32F' in mode or mode == 'F':
+        # Ensure correct dtype
+        if mode in ['RGBA;16', 'RGB;16', 'I;16']:
+            return array.astype(np.uint16) if array.dtype != np.uint16 else array
+        elif mode in ['F', 'RGB;32F', 'RGBA;32F']:
+            return array.astype(np.float32) if array.dtype != np.float32 else array
+        return array
+    
+    # For 8-bit modes, convert to PIL Image
+    try:
+        if array.dtype != np.uint8:
+            array = array.astype(np.uint8)
+        return Image.fromarray(array, mode=mode)
+    except:
+        # Fallback
+        return Image.fromarray(array)
+
+
 def find_param(calib_xml: ET.Element, param_name: str) -> float:
     """Find a parameter in calibration XML, return 0.0 if not found."""
     param = calib_xml.find(param_name)
@@ -391,11 +603,72 @@ def crop_and_save_image(
     mask_image_path: Optional[str] = None,
     output_mask_path: Optional[str] = None,
     yaw_offset: float = 0.0,
+    preserve_alpha: bool = False,
+    verbose: bool = False,
 ) -> Tuple[str, str, str, np.ndarray]:
-    """Crop equirectangular image and save. Optionally crop and save mask from file path. Returns (direction, output_name, output_path, metadata)."""
-    equirect_image = Image.open(image_path)
-    if equirect_image.mode != "RGB":
-        equirect_image = equirect_image.convert("RGB")
+    """Crop equirectangular image and save. Optionally crop and save mask from file path. Returns (direction, output_name, output_path, metadata).
+    
+    Preserves original image mode, bit depth, and alpha channel through the cropping process.
+    Bit depth is detected per-image to handle mixed bit depth datasets correctly.
+    """
+    # Use OpenCV-based reader to properly handle 16-bit RGBA
+    equirect_image = open_image_preserving_bitdepth(image_path)
+    
+    # Detect if it's a numpy array (16-bit+) or PIL Image (8-bit)
+    is_numpy_array = isinstance(equirect_image, np.ndarray)
+    
+    # Verify input file info
+    try:
+        input_file = Path(image_path)
+        input_size_bytes = input_file.stat().st_size
+    except:
+        input_size_bytes = 0
+    
+    # Detect this specific image's bit depth (important for mixed bit-depth datasets)
+    if is_numpy_array:
+        # NumPy array from OpenCV (16-bit or higher)
+        dtype = equirect_image.dtype
+        channels = equirect_image.shape[2] if len(equirect_image.shape) == 3 else 1
+        
+        if dtype == np.uint16:
+            is_16bit = True
+            is_32bit = False
+            if channels == 1:
+                original_mode = 'I;16'
+            elif channels == 3:
+                original_mode = 'RGB;16'
+            elif channels == 4:
+                original_mode = 'RGBA;16'
+            else:
+                original_mode = 'RGB;16'
+        elif dtype == np.uint32:
+            is_16bit = False
+            is_32bit = True
+            original_mode = 'F'
+        else:
+            is_16bit = False
+            is_32bit = False
+            original_mode = 'RGB'
+    else:
+        # PIL Image
+        original_mode = equirect_image.mode
+        is_16bit = ';16' in original_mode or 'I;16' in original_mode
+        is_32bit = ';32F' in original_mode or 'F' in original_mode
+    
+    # Always write debug log (for GUI visibility even when not verbose on console)
+    # DEBUG LOG DISABLED
+    
+    if verbose:
+        print(f"  Cropping {Path(image_path).name} ({direction}): input mode={original_mode}")
+    
+    # Convert numpy array to PIL Image if needed
+    if is_numpy_array:
+        # Keep as numpy array for 16-bit processing - PIL doesn't support RGBA;16 mode
+        # We'll convert to PIL only at save time
+        pass  # Keep equirect_image as numpy array
+    
+    # Only convert if output format doesn't support the current bit depth
+    # Don't force conversion - the crop_direction function will preserve the original mode and bit depth
     
     cropped = crop_direction(
         equirect_image,
@@ -405,41 +678,173 @@ def crop_and_save_image(
         flip_vertical=flip_vertical,
         yaw_offset=yaw_offset,
     )
-    cropped.save(output_image_path, quality=100)
     
-    # Crop and save mask if provided
+    # Log post-crop mode to debug file
+    # DEBUG LOG DISABLED
+    
+    if verbose and isinstance(cropped, Image.Image) and cropped.mode != original_mode:
+        print(f"    Mode changed after crop: {original_mode} → {cropped.mode}")
+    
+    # Save with appropriate format settings based on output file extension
+    output_path_lower = output_image_path.lower()
+    
+    # Handle numpy array (16-bit) separately - use OpenCV for saving
+    if isinstance(cropped, np.ndarray):
+        try:
+            import cv2
+            if cropped.dtype == np.uint16:
+                # Convert from RGB to BGR for OpenCV if RGB/RGBA
+                if len(cropped.shape) == 3 and cropped.shape[2] == 3:
+                    cropped_cv = cv2.cvtColor(cropped, cv2.COLOR_RGB2BGR)
+                elif len(cropped.shape) == 3 and cropped.shape[2] == 4:
+                    cropped_cv = cv2.cvtColor(cropped, cv2.COLOR_RGBA2BGRA)
+                else:
+                    cropped_cv = cropped
+                
+                # Save with OpenCV (preserves 16-bit)
+                success = cv2.imwrite(output_image_path, cropped_cv)
+                if verbose and success:
+                    print(f"    Saved as 16-bit PNG with OpenCV")
+                try:
+                    debug_log = Path(output_image_path).parent / "DEBUG_BITDEPTH.log"
+                    with open(debug_log, 'a') as f:
+                        f.write(f"  Saved as 16-bit with OpenCV (cv2.imwrite), file={Path(output_image_path).name}\n")
+                        f.flush()
+                except:
+                    pass
+                return
+        except Exception as e:
+            # If OpenCV saving fails, fall through to try PIL
+            pass
+    
+    # PIL Image saving (8-bit)
+    # Failsafe: if cropped is still a numpy array, convert to PIL first
+    if isinstance(cropped, np.ndarray):
+        # Convert numpy array to PIL Image
+        if cropped.dtype == np.uint8:
+            if len(cropped.shape) == 3 and cropped.shape[2] == 4:
+                cropped = Image.fromarray(cropped, 'RGBA')
+            elif len(cropped.shape) == 3 and cropped.shape[2] == 3:
+                cropped = Image.fromarray(cropped, 'RGB')
+            else:
+                cropped = Image.fromarray(cropped)
+        else:
+            # Shouldn't reach here - 16-bit should have been handled above
+            return
+    
+    if output_path_lower.endswith('.jpg') or output_path_lower.endswith('.jpeg'):
+        # JPG doesn't support alpha or bit depths > 8, convert to RGB 8-bit
+        if isinstance(cropped, Image.Image) and cropped.mode not in ['RGB', 'L']:
+            cropped = cropped.convert('RGB')
+        cropped.save(output_image_path, quality=100, optimize=True)
+        if verbose:
+            print(f"    Saved as JPG (8-bit, no alpha)")
+    elif output_path_lower.endswith('.png'):
+        # PNG supports alphaand bit depths
+        if isinstance(cropped, Image.Image):
+            cropped.save(output_image_path, optimize=True)
+            if verbose:
+                print(f"    Saved as PNG ({cropped.mode})")
+    elif output_path_lower.endswith(('.tiff', '.tif')):
+        # TIFF supports all modes and bit depths - preserve as-is
+        if isinstance(cropped, Image.Image):
+            cropped.save(output_image_path, compression='none')
+            if verbose:
+                print(f"    Saved as TIFF ({cropped.mode})")
+    elif output_path_lower.endswith('.webp'):
+        # WebP - convert to RGB/RGBA if needed but preserve 8-bit
+        if isinstance(cropped, Image.Image):
+            if cropped.mode not in ['RGB', 'RGBA', 'L']:
+                if 'A' in cropped.mode:
+                    cropped = cropped.convert('RGBA')
+                else:
+                    cropped = cropped.convert('RGB')
+            cropped.save(output_image_path, quality=100)
+            if verbose:
+                print(f"    Saved as WebP ({cropped.mode})")
+    else:
+        # Default: try to save as-is
+        if isinstance(cropped, Image.Image):
+            cropped.save(output_image_path, quality=100)
+            if verbose:
+                print(f"    Saved as {Path(output_image_path).suffix} ({cropped.mode})")
+    
+    # Crop and save mask if provided (masks are always 8-bit)
     if mask_image_path is not None and output_mask_path is not None:
-        mask_image = Image.open(mask_image_path)
-        cropped_mask = crop_direction(
-            mask_image,
-            direction,
-            crop_size,
-            fov_deg=fov_deg,
-            flip_vertical=flip_vertical,
-            yaw_offset=yaw_offset,
-        )
-        cropped_mask.save(output_mask_path)
+        try:
+            mask_image = Image.open(mask_image_path)
+            cropped_mask = crop_direction(
+                mask_image,
+                direction,
+                crop_size,
+                fov_deg=fov_deg,
+                flip_vertical=flip_vertical,
+                yaw_offset=yaw_offset,
+            )
+            # cropped_mask should be PIL Image for masks (8-bit)
+            if isinstance(cropped_mask, Image.Image):
+                cropped_mask.save(output_mask_path)
+        except Exception as e:
+            pass
+    
+    # Verify output file mode by re-opening it
+    # DEBUG LOG DISABLED
     
     output_name = Path(output_image_path).name
     return (direction, output_name, output_image_path, np.array([]))
 
 
 def crop_direction(
-    equirect_image: Image.Image,
+    equirect_image,  # Can be PIL Image or numpy array
     direction: str,
     crop_size: int,
     fov_deg: float = 90.0,
     flip_vertical: bool = True,
     yaw_offset: float = 0.0,
-) -> Image.Image:
+):
     """Rectilinear 90° crop from equirectangular using cv2.remap (cube map layout).
     
     Extracts 6 directions (top/front/right/back/left/bottom) like a cube map unfolding.
+    Preserves alpha channel and bit depth (8-bit, 16-bit, 32-bit) if present in the input image.
+    
+    Accepts both PIL Image and numpy array inputs (for 16-bit+ support).
     
     Args:
         yaw_offset: Additional yaw rotation in degrees to apply to the crop direction.
                    Use this to rotate the cubemap extraction angle per frame.
     """
+    # Handle both PIL Image and numpy array inputs
+    is_numpy_input = isinstance(equirect_image, np.ndarray)
+    
+    if is_numpy_input:
+        # Numpy array (16-bit from OpenCV)
+        equirect_np_temp = equirect_image
+        height, width = equirect_image.shape[:2]
+        channels = equirect_image.shape[2] if len(equirect_image.shape) == 3 else 1
+        
+        # Infer mode from numpy dtype and channels
+        if equirect_image.dtype == np.uint16:
+            if channels == 4:
+                original_mode = 'RGBA;16'
+            elif channels == 3:
+                original_mode = 'RGB;16'
+            else:
+                original_mode = 'I;16'
+        elif equirect_image.dtype == np.uint8:
+            if channels == 4:
+                original_mode = 'RGBA'
+            elif channels == 3:
+                original_mode = 'RGB'
+            else:
+                original_mode = 'L'
+        else:
+            original_mode = 'RGB'
+    else:
+        # PIL Image
+        width, height = equirect_image.size
+        original_mode = equirect_image.mode
+        equirect_np_temp = np.array(equirect_image)
+    
     # Prepare output grid (pixel centers).
     w_out = h_out = crop_size
     fx = fy = (w_out / 2.0) / np.tan(np.deg2rad(fov_deg) / 2.0)
@@ -472,24 +877,79 @@ def crop_direction(
     lon = np.arctan2(dirs[..., 0], dirs[..., 2])  # [-pi, pi]
     lat = np.arctan2(dirs[..., 1], np.sqrt(dirs[..., 0] ** 2 + dirs[..., 2] ** 2))  # [-pi/2, pi/2]
 
-    width, height = equirect_image.size
     map_x = (lon / (2 * np.pi) + 0.5) * float(width)
     map_y = (0.5 - lat / np.pi) * float(height)
     if flip_vertical:
         map_y = (0.5 + lat / np.pi) * float(height)
     map_y = np.clip(map_y, 0.0, float(height - 1))
 
-    # Remap (wrap horizontally, clamp vertically).
-    equirect_np = np.array(equirect_image.convert("RGB"))
-    sampled = cv2.remap(
-        equirect_np,
-        map_x.astype(np.float32),
-        map_y.astype(np.float32),
-        interpolation=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_WRAP,
-    )
-
-    return Image.fromarray(sampled, mode="RGB")
+    # Determine original mode and bit depth (don't convert yet, preserve original mode)
+    has_alpha = 'A' in original_mode
+    is_16bit = ';16' in original_mode or 'I;16' in original_mode
+    is_32bit = ';32F' in original_mode or 'F' in original_mode
+    
+    # Remap with bit depth preservation
+    if has_alpha and len(equirect_np_temp.shape) == 3 and equirect_np_temp.shape[2] == 4:
+        # Split into color and alpha channels
+        color_channels = equirect_np_temp[:, :, :3]
+        alpha_channel = equirect_np_temp[:, :, 3]
+        
+        # Remap color channels
+        sampled_color = cv2.remap(
+            color_channels,
+            map_x.astype(np.float32),
+            map_y.astype(np.float32),
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_WRAP,
+        )
+        
+        # Remap alpha channel
+        sampled_alpha = cv2.remap(
+            alpha_channel,
+            map_x.astype(np.float32),
+            map_y.astype(np.float32),
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_WRAP,
+        )
+        
+        # Combine back - convert to target dtype with proper scaling
+        if is_16bit:
+            # For 16-bit, clip to valid range and convert
+            sampled_color = np.clip(sampled_color, 0, 65535).astype(np.uint16)
+            sampled_alpha = np.clip(sampled_alpha, 0, 65535).astype(np.uint16)
+        elif is_32bit:
+            # For 32-bit float, ensure it's float32
+            sampled_color = sampled_color.astype(np.float32)
+            sampled_alpha = sampled_alpha.astype(np.float32)
+        else:
+            # For 8-bit, clip to valid range and convert
+            sampled_color = np.clip(sampled_color, 0, 255).astype(np.uint8)
+            sampled_alpha = np.clip(sampled_alpha, 0, 255).astype(np.uint8)
+        
+        sampled = np.dstack((sampled_color, sampled_alpha))
+    else:
+        # No alpha channel, just remap the color channels
+        sampled = cv2.remap(
+            equirect_np_temp,
+            map_x.astype(np.float32),
+            map_y.astype(np.float32),
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_WRAP,
+        )
+        
+        # Convert to target dtype with proper scaling
+        if is_16bit:
+            # For 16-bit, clip to valid range and convert
+            sampled = np.clip(sampled, 0, 65535).astype(np.uint16)
+        elif is_32bit:
+            # For 32-bit float, ensure it's float32
+            sampled = sampled.astype(np.float32)
+        else:
+            # For 8-bit, clip to valid range and convert
+            sampled = np.clip(sampled, 0, 255).astype(np.uint8)
+    
+    # Return with original mode preserved using helper function
+    return numpy_to_image_preserving_bitdepth(sampled, original_mode)
 
 
 def convert_metashape_to_colmap(
@@ -516,6 +976,7 @@ def convert_metashape_to_colmap(
     mask_overexposure: bool = False,
     overexposure_threshold: int = 250,
     overexposure_dilate: int = 5,
+    output_format: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Convert Metashape equirectangular data to COLMAP format.
     
@@ -536,6 +997,8 @@ def convert_metashape_to_colmap(
         mask_overexposure: If True, also mask white-blown-out (overexposed) pixels.
         overexposure_threshold: Pixel value threshold (0-255) for overexposure detection.
         overexposure_dilate: Dilation radius (pixels) for overexposure mask.
+        output_format: Output image format ('png', 'jpg', 'tiff', 'webp', 'auto', or None).
+                      'auto' or None means use the same format as input images (default).
     """
     if output_dir is None:
         output_dir = xml_path.parent
@@ -581,6 +1044,27 @@ def convert_metashape_to_colmap(
         if component_dict:
             for comp_id, comp_mat in component_dict.items():
                 print(f"  Component '{comp_id}': {comp_mat}")
+
+    # Detect input image format and determine output format
+    input_ext = ".jpg"  # default
+    input_mode = "RGB"  # default
+    input_bit_depth = 8  # default
+    preserve_alpha = False
+    if image_files:
+        first_image = image_files[0]
+        input_ext, input_mode, input_bit_depth = detect_image_format(first_image)
+        # ALWAYS print this to console so user can see it even from GUI
+        print(f"Detected input format: {input_ext} (mode: {input_mode}, {input_bit_depth}-bit)")
+        if verbose:
+            print(f"Detected input format: {input_ext} (mode: {input_mode}, {input_bit_depth}-bit)")
+    
+    # Get output format extension and alpha preservation setting
+    output_ext, preserve_alpha = get_output_format_extension(output_format, input_ext, input_mode)
+    # ALWAYS print this to console
+    print(f"Output format: {output_ext}, preserve alpha: {preserve_alpha}, bit depth: {input_bit_depth}-bit")
+    if verbose:
+        print(f"Output format: {output_ext}, preserve alpha: {preserve_alpha}, bit depth: {input_bit_depth}-bit")
+
 
     camera_id = 1  # single shared intrinsic entry
     fx = fy = (crop_size / 2.0) / np.tan(np.deg2rad(fov_deg) / 2.0)
@@ -701,10 +1185,10 @@ def convert_metashape_to_colmap(
 
         # Queue tasks for each direction
         for direction in directions:
-            output_image_name = f"{base_name}_{direction}.jpg"
+            output_image_name = f"{base_name}_{direction}{output_ext}"
             output_image_path = str(images_output_dir / output_image_name)
-            crop_tasks.append((str(src_image_path), direction, crop_size, output_image_path, fov_deg, flip_vertical, current_yaw_offset))
-            camera_metadata.append((base_name, direction, R_c2w, t_c2w, current_yaw_offset))
+            crop_tasks.append((str(src_image_path), direction, crop_size, output_image_path, fov_deg, flip_vertical, current_yaw_offset, preserve_alpha))
+            camera_metadata.append((base_name, direction, R_c2w, t_c2w, current_yaw_offset, output_ext))
 
         processed_cameras += 1
         frame_index += 1
@@ -783,11 +1267,14 @@ def convert_metashape_to_colmap(
         if verbose:
             print(f"Cropping {len(crop_tasks)} images...")
         
+        # Create a debug log in the output directory with main process info
+        # DEBUG LOG DISABLED
+        
         # Parallel processing for both RGB images and masks
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
             futures = []
             for task in crop_tasks:
-                src_image_path, direction, crop_size_val, output_image_path, fov_deg_val, flip_vertical_val, yaw_offset_val = task
+                src_image_path, direction, crop_size_val, output_image_path, fov_deg_val, flip_vertical_val, yaw_offset_val, preserve_alpha_val = task
                 
                 # Determine mask file path if masks are enabled
                 mask_file_path = None
@@ -795,8 +1282,14 @@ def convert_metashape_to_colmap(
                 if generate_masks:
                     mask_file_path = equirect_mask_paths.get(src_image_path)
                     if mask_file_path is not None:
+                        # Replace the output image extension with .png for mask
                         output_image_name = Path(output_image_path).name
-                        output_mask_name = output_image_name.replace(".jpg", ".png")
+                        base_output_name = output_image_name
+                        for ext in ['.jpg', '.jpeg', '.png', '.tiff', '.tif', '.webp']:
+                            if output_image_name.endswith(ext):
+                                base_output_name = output_image_name[:-len(ext)]
+                                break
+                        output_mask_name = f"{base_output_name}.png"
                         output_mask_path = str(masks_output_dir / output_mask_name)
                 
                 futures.append(
@@ -811,6 +1304,8 @@ def convert_metashape_to_colmap(
                         mask_file_path,
                         output_mask_path,
                         yaw_offset_val,
+                        preserve_alpha_val,
+                        verbose,
                     )
                 )
 
@@ -849,8 +1344,8 @@ def convert_metashape_to_colmap(
                 print()
 
     # Build images_colmap from results
-    for idx, (base_name, direction, R_c2w, t_c2w, yaw_offset) in enumerate(camera_metadata):
-        output_image_name = f"{base_name}_{direction}.jpg"
+    for idx, (base_name, direction, R_c2w, t_c2w, yaw_offset, output_ext) in enumerate(camera_metadata):
+        output_image_name = f"{base_name}_{direction}{output_ext}"
         
         R_dir = get_direction_rotation_matrix(direction)
         
@@ -1253,6 +1748,13 @@ def main() -> int:
         default=int(config["overexposure-dilate"]) if "overexposure-dilate" in config else 5,
         help="Dilation radius in pixels for the overexposure mask to cover fringe artifacts (default: 5)"
     )
+    parser.add_argument(
+        "--output-format",
+        type=str,
+        default=config.get("output-format", "auto"),
+        choices=["auto", "jpg", "jpeg", "png", "tiff", "tif", "webp"],
+        help="Output image format. 'auto' (default) uses the same format as input images, preserving bit depth and alpha channel when applicable."
+    )
 
     args = parser.parse_args()
     
@@ -1336,6 +1838,7 @@ def main() -> int:
             mask_overexposure=args.mask_overexposure,
             overexposure_threshold=args.overexposure_threshold,
             overexposure_dilate=args.overexposure_dilate,
+            output_format=args.output_format,
         )
         if not args.quiet:
             print("\nConversion complete!")
