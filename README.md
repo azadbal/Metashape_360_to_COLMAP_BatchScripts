@@ -24,6 +24,9 @@ Convert Agisoft Metashape equirectangular (spherical) camera exports into COLMAP
     * V0.6.0
       - Supported custom mask and fixed some bugs.
         - https://x.com/kotohibi_3d/status/2041909510047199539
+    * V0.7.0
+      - Able to export XMP file for RealityScan
+        - https://x.com/kotohibi_3d/status/2044779767002771827
 ---
 
 Refer to the detail workflow
