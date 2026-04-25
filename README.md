@@ -27,6 +27,11 @@ Convert Agisoft Metashape equirectangular (spherical) camera exports into COLMAP
     * V0.7.0
       - Able to export XMP file for RealityScan
         - https://x.com/kotohibi_3d/status/2044779767002771827
+    * V0.8.0
+      - Available 360 and planar mixed image workflow
+      - When including planar images in camera.xml, undistort them as pinhole model. (Mixed SfM needed in Metashape in advance)
+      - Even able to export camera pose both of cubemap and planar in XMP files for RealityScan (*dev option*)
+      - https://x.com/kotohibi_3d/status/2048018154304188725
 ---
 
 Refer to the detail workflow
