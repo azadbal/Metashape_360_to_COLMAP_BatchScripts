@@ -32,6 +32,10 @@ Convert Agisoft Metashape equirectangular (spherical) camera exports into COLMAP
       - When including planar images in camera.xml, undistort them as pinhole model. (Mixed SfM needed in Metashape in advance)
       - Even able to export camera pose both of cubemap and planar in XMP files for RealityScan (*dev option*)
       - https://x.com/kotohibi_3d/status/2048018154304188725
+    * V0.9.0
+      - It can specify the resolution rate and skip frames for each direction of extraction.Even by reducing data in directions with less texture (sky, ground) and directions with less parallax (front and back), you can retain 3DGS quality while reducing the amount of data. 
+      - It is possible to perform SfM with a sufficient number of frames and then reduce data when 3DGS training.
+      - https://x.com/kotohibi_3d/status/2049747035344224515
 ---
 
 Refer to the detail workflow
