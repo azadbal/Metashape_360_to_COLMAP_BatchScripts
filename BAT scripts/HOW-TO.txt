@@ -1,0 +1,23 @@
+1. extract images from equirec mp4 using the 1-extract_360_frames_ffmpeg.bat
+	that should place the PNGs in a root/images/subdir/ folder
+2. import images into metashape
+	select all images
+	go to Tools > camera calibration
+		change camera type to spherical
+3. align
+	accuracy high
+	generic preselection
+	Estimated
+	160k key point limit
+	16k tie point limit
+	exclude stationairy tie points 
+4. export MS data to  root/images/
+	export ply (file, export, point cloud)
+		convert colors to 8 bit rgb
+		binary encoding
+		point attributes color, nomral
+	export cameras  as xmp
+		
+5. drag and drop root/images folder onto 2-MS-to-Colmap.bat
+	it should create a colmap folder
+6. drag and drop colmap folder onto any splat training software
