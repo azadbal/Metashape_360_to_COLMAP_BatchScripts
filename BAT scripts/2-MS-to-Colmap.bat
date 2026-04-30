@@ -14,12 +14,14 @@ REM   camera export XML. XMP files are not accepted by that Python script.
 REM User-tunable defaults. Existing environment variables win.
 if not defined PYTHON_EXE set "PYTHON_EXE=python"
 if not defined REPO_ROOT set "REPO_ROOT=C:\Dev\3DGS\MetaShape360-to-colmap-kotohibi"
+REM Set to jpg or png.
+if not defined IMAGE_FORMAT set "IMAGE_FORMAT=jpg"
 if not defined CROP_SIZE set "CROP_SIZE=1920"
 if not defined FOV_DEG set "FOV_DEG=90"
 if not defined MAX_IMAGES set "MAX_IMAGES=20000"
 if not defined NUM_WORKERS set "NUM_WORKERS=20"
 if not defined YAW_OFFSET set "YAW_OFFSET=0"
-if not defined OUTPUT_FORMAT set "OUTPUT_FORMAT=auto"
+if not defined OUTPUT_FORMAT set "OUTPUT_FORMAT=%IMAGE_FORMAT%"
 if not defined OUTPUT_DIR_NAME set "OUTPUT_DIR_NAME=colmap"
 if not defined ENABLE_FLIP_VERTICAL set "ENABLE_FLIP_VERTICAL=1"
 if not defined ENABLE_ROTATE_Z180 set "ENABLE_ROTATE_Z180=1"

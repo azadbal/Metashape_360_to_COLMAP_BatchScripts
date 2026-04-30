@@ -4,8 +4,8 @@ setlocal EnableExtensions
 if not defined PYTHON_EXE set "PYTHON_EXE=python"
 
 set "BATCH_DIR=%~dp0"
-for %%I in ("%BATCH_DIR%.") do set "REPO_ROOT=%%~fI"
-set "SCRIPT_DIR=%REPO_ROOT%\Metashape_360_to_COLMAP_plane"
+for %%I in ("%BATCH_DIR%..") do set "REPO_ROOT=%%~fI"
+set "SCRIPT_DIR=%REPO_ROOT%"
 set "GUI_SCRIPT=%SCRIPT_DIR%\metashape_360_gui.py"
 
 if not exist "%GUI_SCRIPT%" (
