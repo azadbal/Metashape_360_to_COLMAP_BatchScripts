@@ -6,7 +6,7 @@ set "FPS=2"
 REM Set to jpg or png.
 set "IMAGE_FORMAT=jpg"
 REM Lower is higher quality for JPG output. Ignored for PNG.
-set "JPG_QUALITY=2"
+set "JPG_QUALITY=3"
 
 set "ROOT=%~dp0"
 set "OUT=%ROOT%images"
